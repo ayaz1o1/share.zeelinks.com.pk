@@ -1,1 +1,4 @@
+User-agent: *
+Allow: /
 
+Sitemap: https://share.zeelinks.com.pk/sitemap.xml
