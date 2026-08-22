@@ -1,1 +1,25 @@
+name: Deploy to Firebase Hosting
+on:
+  push:
+    branches:
+      - main  # Change to 'master' if that is your default branch name
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      # Uncomment the lines below if your project needs a build step (like React, Angular, Vue, etc.):
+      # - name: Install and Build
+      #   run: npm ci && npm run build
+
+      - name: Deploy to Firebase Hosting
+        uses: FirebaseExtended/action-hosting-deploy@v0
+        with:
+          repoToken: ${{ secrets.GITHUB_TOKEN }}
+          firebaseServiceAccount: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_ZEESHARE }}
+          channelId: live
+          projectId: zeeshare
 
