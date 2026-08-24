@@ -31,9 +31,16 @@ refresh.
 
 ## 3. Deploy hosting
 
+Manual:
+
 ```bash
 firebase deploy --only hosting
 ```
+
+From GitHub (recommended): push to `main`. The workflow in
+`.github/workflows/firebase-hosting.yml` runs the build and deploys to the
+`zee-linkss` project. Add the repository secrets listed in README.md first —
+`VITE_*` values must exist at build time or the deployed site cannot pair devices.
 
 ## 4. Connect the domain
 

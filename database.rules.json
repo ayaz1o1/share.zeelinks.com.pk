@@ -1,16 +1,14 @@
 {
   "rules": {
-    "rooms": {
+    "zeeshare": {
       "$room": {
         "peers": {
+          ".read": true,
           "$peer": {
-            ".read": true,
-            ".write": true,
-            ".validate": "newData.hasChildren(['peerId', 'updatedAt'])"
-          },
-          ".read": true
+            ".write": true
+          }
         },
-        "signals": {
+        "inbox": {
           "$peer": {
             ".read": true,
             ".write": true
