@@ -53,7 +53,14 @@ export class ShareEngine {
 
   async start() {
     this.peerId = crypto.randomUUID();
-    this.signaling = await createSignaling(this.room, this.peerId);
+    try {
+      this.signaling = await createSignaling(this.room, this.peerId);
+    } catch (error) {
+      console.error(error);
+      this.status = "offline";
+      this.rebuild();
+      return;
+    }
     await this.signaling.start({
       onStatus: (status) => {
         this.status = status;
