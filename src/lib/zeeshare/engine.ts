@@ -1,14 +1,24 @@
 import { createSignaling, type Signaling } from "./signaling";
 import type { ConnectionStatus, SharedFile, TransferState } from "./types";
+import { vaultList, vaultRemove, vaultSave } from "./vault";
 
-const CHUNK_SIZE = 256 * 1024;
-const BUFFER_HIGH = 8 * 1024 * 1024;
-const BUFFER_LOW = 1 * 1024 * 1024;
+/**
+ * 64 KB is the largest data-channel message every current browser accepts
+ * reliably. Bigger messages (e.g. 256 KB) are silently dropped or close the
+ * channel on some builds, which is why larger files used to stall at 0%.
+ * The real cap is read from the connection at send time and clamped to this.
+ */
+const MAX_CHUNK = 64 * 1024;
+const BUFFER_HIGH = 4 * 1024 * 1024;
+const BUFFER_LOW = 512 * 1024;
+const CONNECT_TIMEOUT = 15_000;
+const STALL_TIMEOUT = 20_000;
 
 type Signal =
   | { kind: "offer"; sdp: string; transferId: string; fileId: string }
   | { kind: "answer"; sdp: string; transferId: string }
-  | { kind: "ice"; candidate: RTCIceCandidateInit; transferId: string };
+  | { kind: "ice"; candidate: RTCIceCandidateInit; transferId: string }
+  | { kind: "error"; transferId: string; message: string };
 
 type Snapshot = {
   status: ConnectionStatus;
@@ -53,14 +63,11 @@ export class ShareEngine {
 
   async start() {
     this.peerId = crypto.randomUUID();
-    try {
-      this.signaling = await createSignaling(this.room, this.peerId);
-    } catch (error) {
-      console.error(error);
-      this.status = "offline";
-      this.rebuild();
-      return;
-    }
+
+    // Bring back anything this device was already sharing before a refresh.
+    await this.restoreVault();
+
+    this.signaling = await createSignaling(this.room, this.peerId);
     await this.signaling.start({
       onStatus: (status) => {
         this.status = status;
@@ -81,6 +88,9 @@ export class ShareEngine {
         void this.handleSignal(from, signal as Signal);
       },
     });
+
+    // Re-announce restored files under this session's peer id.
+    if (this.localFiles.size) this.signaling.publishFiles(this.myFileList());
     this.rebuild();
   }
 
@@ -89,6 +99,25 @@ export class ShareEngine {
     this.connections.clear();
     await this.signaling?.stop();
     this.signaling = null;
+  }
+
+  private async restoreVault() {
+    const entries = await vaultList();
+    for (const entry of entries) {
+      const file = new File([entry.blob], entry.name, { type: entry.type });
+      this.localFiles.set(entry.id, {
+        file,
+        meta: {
+          id: entry.id,
+          name: entry.name,
+          size: entry.size,
+          type: entry.type,
+          ownerId: this.peerId,
+          mine: true,
+        },
+      });
+    }
+    this.rebuild();
   }
 
   addFiles(files: File[]) {
@@ -105,6 +134,14 @@ export class ShareEngine {
           mine: true,
         },
       });
+      void vaultSave({
+        id,
+        name: file.name,
+        size: file.size,
+        type: file.type,
+        blob: file,
+        addedAt: Date.now(),
+      });
     }
     this.rebuild();
     this.signaling?.publishFiles(this.myFileList());
@@ -112,6 +149,7 @@ export class ShareEngine {
 
   removeFile(id: string) {
     if (!this.localFiles.delete(id)) return;
+    void vaultRemove(id);
     this.rebuild();
     this.signaling?.publishFiles(this.myFileList());
   }
@@ -143,6 +181,14 @@ export class ShareEngine {
         } satisfies Signal);
       }
     };
+    connection.onconnectionstatechange = () => {
+      if (connection.connectionState === "failed") {
+        this.failTransfer(
+          transferId,
+          "Could not reach that device. Make sure both devices are on the same Wi-Fi network (and that the network does not block device-to-device traffic).",
+        );
+      }
+    };
 
     const channel = connection.createDataChannel("file", { ordered: true });
     channel.binaryType = "arraybuffer";
@@ -161,40 +207,55 @@ export class ShareEngine {
     // a guest network, or client isolation) nothing will ever open. Surface that
     // instead of leaving the progress bar at 0%.
     window.setTimeout(() => {
-      const current = this.transfers.get(transferId);
-      if (current?.status !== "connecting") return;
-      connection.close();
-      this.connections.delete(transferId);
-      this.patchTransfer(transferId, {
-        status: "failed",
-        error: "Could not reach that device. Make sure both devices are on the same Wi-Fi network.",
-      });
-    }, 25_000);
+      if (this.transfers.get(transferId)?.status !== "connecting") return;
+      this.failTransfer(
+        transferId,
+        "Could not reach that device. Make sure both devices are on the same Wi-Fi network.",
+      );
+    }, CONNECT_TIMEOUT);
   }
 
   private receiveOn(channel: RTCDataChannel, transferId: string, meta: SharedFile) {
     const parts: BlobPart[] = [];
     let received = 0;
+    let stallTimer = 0;
 
-    channel.onopen = () => this.patchTransfer(transferId, { status: "active" });
-    channel.onerror = () =>
-      this.patchTransfer(transferId, { status: "failed", error: "Connection interrupted" });
+    const armStall = () => {
+      window.clearTimeout(stallTimer);
+      stallTimer = window.setTimeout(() => {
+        if (this.transfers.get(transferId)?.status !== "active") return;
+        this.failTransfer(transferId, "Transfer stopped responding. Please try again.");
+      }, STALL_TIMEOUT);
+    };
+
+    channel.onopen = () => {
+      this.patchTransfer(transferId, { status: "active" });
+      armStall();
+    };
+    channel.onerror = () => this.failTransfer(transferId, "Connection interrupted");
+    channel.onclose = () => {
+      window.clearTimeout(stallTimer);
+      if (this.transfers.get(transferId)?.status === "active") {
+        this.failTransfer(transferId, "Connection closed before the file finished.");
+      }
+    };
 
     channel.onmessage = (event) => {
       if (typeof event.data === "string") {
         if (event.data === "eof") {
+          window.clearTimeout(stallTimer);
           saveBlob(new Blob(parts, { type: meta.type || "application/octet-stream" }), meta.name);
           this.patchTransfer(transferId, { status: "done", transferred: meta.size });
           channel.close();
-          this.connections.get(transferId)?.close();
-          this.connections.delete(transferId);
+          this.closeConnection(transferId);
         }
         return;
       }
-      const chunk = event.data as ArrayBuffer;
+      const chunk = toArrayBuffer(event.data);
       parts.push(chunk);
       received += chunk.byteLength;
       this.patchTransfer(transferId, { transferred: received });
+      armStall();
     };
   }
 
@@ -203,7 +264,14 @@ export class ShareEngine {
   private async handleSignal(from: string, signal: Signal) {
     if (signal.kind === "offer") {
       const entry = this.localFiles.get(signal.fileId);
-      if (!entry) return;
+      if (!entry) {
+        this.signaling?.sendSignal(from, {
+          kind: "error",
+          transferId: signal.transferId,
+          message: "That file is no longer being shared.",
+        } satisfies Signal);
+        return;
+      }
 
       const connection = new RTCPeerConnection({ iceServers: [] });
       this.connections.set(signal.transferId, connection);
@@ -217,7 +285,7 @@ export class ShareEngine {
         }
       };
       connection.ondatachannel = (event) => {
-        void this.sendFile(event.channel, signal.transferId, entry.file);
+        void this.sendFile(event.channel, signal.transferId, entry.file, from);
       };
 
       await connection.setRemoteDescription({ type: "offer", sdp: signal.sdp });
@@ -229,6 +297,11 @@ export class ShareEngine {
         sdp: answer.sdp ?? "",
         transferId: signal.transferId,
       } satisfies Signal);
+      return;
+    }
+
+    if (signal.kind === "error") {
+      this.failTransfer(signal.transferId, signal.message);
       return;
     }
 
@@ -259,7 +332,12 @@ export class ShareEngine {
     }
   }
 
-  private async sendFile(channel: RTCDataChannel, transferId: string, file: File) {
+  private async sendFile(
+    channel: RTCDataChannel,
+    transferId: string,
+    file: File,
+    receiverId: string,
+  ) {
     channel.binaryType = "arraybuffer";
     channel.bufferedAmountLowThreshold = BUFFER_LOW;
 
@@ -278,6 +356,11 @@ export class ShareEngine {
     });
     this.patchTransfer(transferId, { status: "active" });
 
+    // Never send a message larger than the negotiated SCTP limit — that is what
+    // silently killed transfers of anything bigger than one chunk.
+    const negotiated = this.connections.get(transferId)?.sctp?.maxMessageSize ?? MAX_CHUNK;
+    const chunkSize = Math.max(16 * 1024, Math.min(MAX_CHUNK, negotiated));
+
     const drain = () =>
       new Promise<void>((resolve) => {
         channel.onbufferedamountlow = () => {
@@ -292,26 +375,33 @@ export class ShareEngine {
       // size is limited only by the receiving device's own storage.
       while (offset < file.size) {
         if (channel.readyState !== "open") throw new Error("Connection closed");
-        if (channel.bufferedAmount > BUFFER_HIGH) await drain();
-        const buffer = await file.slice(offset, offset + CHUNK_SIZE).arrayBuffer();
+        while (channel.bufferedAmount > BUFFER_HIGH) await drain();
+        const buffer = await file.slice(offset, offset + chunkSize).arrayBuffer();
         channel.send(buffer);
         offset += buffer.byteLength;
         this.patchTransfer(transferId, { transferred: offset });
       }
+      // Wait for the send buffer to empty so "eof" cannot overtake data.
+      while (channel.readyState === "open" && channel.bufferedAmount > 0) {
+        await new Promise((resolve) => window.setTimeout(resolve, 50));
+      }
       channel.send("eof");
       this.patchTransfer(transferId, { status: "done", transferred: file.size });
     } catch (error) {
-      this.patchTransfer(transferId, {
-        status: "failed",
-        error: error instanceof Error ? error.message : "Transfer failed",
-      });
+      const message = error instanceof Error ? error.message : "Transfer failed";
+      this.patchTransfer(transferId, { status: "failed", error: message });
+      this.signaling?.sendSignal(receiverId, {
+        kind: "error",
+        transferId,
+        message,
+      } satisfies Signal);
     }
   }
 
   // ------------------------------------------------------------------- shared
 
   private myFileList(): SharedFile[] {
-    return [...this.localFiles.values()].map((entry) => entry.meta);
+    return [...this.localFiles.values()].map((entry) => ({ ...entry.meta, ownerId: this.peerId }));
   }
 
   private setTransfer(transfer: TransferState) {
@@ -326,6 +416,18 @@ export class ShareEngine {
     this.rebuild();
   }
 
+  private failTransfer(id: string, message: string) {
+    const current = this.transfers.get(id);
+    if (!current || current.status === "done" || current.status === "failed") return;
+    this.closeConnection(id);
+    this.patchTransfer(id, { status: "failed", error: message });
+  }
+
+  private closeConnection(id: string) {
+    this.connections.get(id)?.close();
+    this.connections.delete(id);
+  }
+
   private rebuild() {
     this.snapshot = {
       status: this.status,
@@ -335,6 +437,13 @@ export class ShareEngine {
     };
     for (const listener of this.listeners) listener();
   }
+}
+
+function toArrayBuffer(data: ArrayBuffer | Uint8Array): ArrayBuffer {
+  if (data instanceof ArrayBuffer) return data;
+  const copy = new Uint8Array(data.byteLength);
+  copy.set(data);
+  return copy.buffer;
 }
 
 function saveBlob(blob: Blob, name: string) {
