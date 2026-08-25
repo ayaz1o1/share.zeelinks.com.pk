@@ -2,25 +2,72 @@
  * Devices behind the same router share one public address, so hashing it gives
  * a stable, private key for "this network". The raw address is never stored or
  * shown — only the hash is used, and it never leaves the handshake relay.
+ *
+ * The hash is cached in this browser for a few minutes so a refresh reconnects
+ * instantly instead of waiting on a network lookup again.
  */
+
+const CACHE_KEY = "zeeshare.room.v1";
+const CACHE_TTL = 10 * 60 * 1000;
+const LOOKUP_TIMEOUT = 2500;
+
 export async function resolveRoom(): Promise<string> {
+  const cached = readCache();
+  if (cached) return cached;
   const address = await publicAddress();
-  return hash(`zeeshare-lan-v1:${address}`);
+  const room = await hash(`zeeshare-lan-v1:${address}`);
+  writeCache(room);
+  return room;
+}
+
+function readCache(): string | null {
+  try {
+    const raw = localStorage.getItem(CACHE_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as { room?: string; at?: number };
+    if (!parsed.room || !parsed.at) return null;
+    if (Date.now() - parsed.at > CACHE_TTL) return null;
+    return parsed.room;
+  } catch {
+    return null;
+  }
+}
+
+function writeCache(room: string) {
+  try {
+    localStorage.setItem(CACHE_KEY, JSON.stringify({ room, at: Date.now() }));
+  } catch {
+    // storage unavailable (private mode) — not fatal
+  }
 }
 
 async function publicAddress(): Promise<string> {
-  const endpoints = ["https://api.ipify.org?format=json", "https://api64.ipify.org?format=json"];
-  for (const endpoint of endpoints) {
-    try {
-      const response = await fetch(endpoint, { cache: "no-store" });
-      if (!response.ok) continue;
-      const data = (await response.json()) as { ip?: string };
-      if (data.ip) return data.ip;
-    } catch {
-      // try the next endpoint
-    }
+  const endpoints = [
+    "https://api.ipify.org?format=json",
+    "https://api64.ipify.org?format=json",
+    "https://ipapi.co/json/",
+  ];
+  // Race them: the first address that comes back wins, so discovery is quick.
+  const results = await Promise.allSettled(endpoints.map((endpoint) => lookup(endpoint)));
+  for (const result of results) {
+    if (result.status === "fulfilled" && result.value) return result.value;
   }
   return "unknown-network";
+}
+
+async function lookup(endpoint: string): Promise<string | null> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), LOOKUP_TIMEOUT);
+  try {
+    const response = await fetch(endpoint, { cache: "no-store", signal: controller.signal });
+    if (!response.ok) return null;
+    const data = (await response.json()) as { ip?: string };
+    return data.ip ?? null;
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 async function hash(input: string): Promise<string> {
