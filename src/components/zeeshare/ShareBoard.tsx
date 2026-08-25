@@ -85,12 +85,12 @@ export function ShareBoard() {
               <Wifi className="size-3.5 text-success" aria-hidden />
               {devices > 1
                 ? `${devices} devices on this network`
-                : "Waiting for another device on this network"}
+                : "Ready — open this page on another device to share"}
             </>
           ) : status === "starting" ? (
             <>
               <Loader2 className="size-3.5 animate-spin" aria-hidden />
-              Getting ready
+              Connecting to your network
             </>
           ) : (
             <>
@@ -98,6 +98,7 @@ export function ShareBoard() {
               Network unavailable
             </>
           )}
+
         </p>
       </div>
 
