@@ -4,12 +4,13 @@
   "sideEffects": false,
   "type": "module",
   "scripts": {
-    "dev": "vite dev",
-    "build": "vite build && node scripts/static-postbuild.mjs",
-    "preview": "vite preview",
-    "lint": "eslint .",
-    "format": "prettier --write ."
-  },
+  "dev": "vite dev",
+  "build": "vite build && node scripts/static-postbuild.mjs",
+  "typecheck": "tsc --noEmit",
+  "preview": "vite preview",
+  "lint": "eslint .",
+  "format": "prettier --write ."
+}
   "dependencies": {
     "@hookform/resolvers": "^5.2.2",
     "@radix-ui/react-accordion": "^1.2.12",
