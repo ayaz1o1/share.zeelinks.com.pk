@@ -3,7 +3,7 @@
   "private": true,
   "sideEffects": false,
   "type": "module",
-scripts": {
+"scripts": {
   "dev": "vite dev",
   "build": "vite build && node scripts/static-postbuild.mjs",
   "typecheck": "tsc --noEmit",
