@@ -8,7 +8,7 @@
  */
 
 const CACHE_KEY = "zeeshare.room.v1";
-const CACHE_TTL = 10 * 60 * 1000;
+const CACHE_TTL = 60 * 60 * 1000;
 const LOOKUP_TIMEOUT = 2500;
 
 export async function resolveRoom(): Promise<string> {
@@ -47,12 +47,17 @@ async function publicAddress(): Promise<string> {
     "https://api64.ipify.org?format=json",
     "https://ipapi.co/json/",
   ];
-  // Race them: the first address that comes back wins, so discovery is quick.
-  const results = await Promise.allSettled(endpoints.map((endpoint) => lookup(endpoint)));
-  for (const result of results) {
-    if (result.status === "fulfilled" && result.value) return result.value;
+  // Resolve on the first successful lookup instead of waiting for every
+  // endpoint. The old Promise.allSettled path waited for the slowest 2.5s
+  // timeout, which made a normal refresh feel unnecessarily slow.
+  try {
+    return await Promise.any(endpoints.map((endpoint) => lookup(endpoint).then((value) => {
+      if (!value) throw new Error("No address");
+      return value;
+    })));
+  } catch {
+    return "unknown-network";
   }
-  return "unknown-network";
 }
 
 async function lookup(endpoint: string): Promise<string | null> {

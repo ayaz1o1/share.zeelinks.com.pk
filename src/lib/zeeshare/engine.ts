@@ -45,6 +45,7 @@ export class ShareEngine {
   private transfers = new Map<string, TransferState>();
   private connections = new Map<string, RTCPeerConnection>();
   private pendingIce = new Map<string, RTCIceCandidateInit[]>();
+  private completedBlobs = new Map<string, Blob>();
   private status: ConnectionStatus = "starting";
   private devices = 1;
   private peerId = "";
@@ -240,23 +241,50 @@ export class ShareEngine {
       }
     };
 
-    channel.onmessage = (event) => {
+    channel.onmessage = async (event) => {
       if (typeof event.data === "string") {
         if (event.data === "eof") {
           window.clearTimeout(stallTimer);
-          saveBlob(new Blob(parts, { type: meta.type || "application/octet-stream" }), meta.name);
-          this.patchTransfer(transferId, { status: "done", transferred: meta.size });
+          if (received !== meta.size) {
+            this.failTransfer(
+              transferId,
+              `Transfer incomplete: received ${received} of ${meta.size} bytes. Please try again.`,
+            );
+            return;
+          }
+          const blob = new Blob(parts, { type: meta.type || "application/octet-stream" });
+          if (blob.size !== meta.size) {
+            this.failTransfer(transferId, "The received file is incomplete. Please try again.");
+            return;
+          }
+          this.completedBlobs.set(transferId, blob);
+          this.patchTransfer(transferId, {
+            status: "done",
+            transferred: meta.size,
+            readyToDownload: true,
+          });
           channel.close();
           this.closeConnection(transferId);
         }
         return;
       }
-      const chunk = toArrayBuffer(event.data);
+      const chunk = await toArrayBuffer(event.data);
       parts.push(chunk);
       received += chunk.byteLength;
       this.patchTransfer(transferId, { transferred: received });
       armStall();
     };
+  }
+
+  // Save only after the transfer is complete. This user-initiated action is
+  // more reliable on mobile browsers than trying to trigger a download from
+  // an asynchronous WebRTC callback.
+  saveTransfer(transferId: string) {
+    const blob = this.completedBlobs.get(transferId);
+    const transfer = this.transfers.get(transferId);
+    if (!blob || !transfer || transfer.status !== "done") return false;
+    saveBlob(blob, transfer.name);
+    return true;
   }
 
   // ------------------------------------------------------------------ sending
@@ -439,8 +467,9 @@ export class ShareEngine {
   }
 }
 
-function toArrayBuffer(data: ArrayBuffer | Uint8Array): ArrayBuffer {
+async function toArrayBuffer(data: ArrayBuffer | Uint8Array | Blob): Promise<ArrayBuffer> {
   if (data instanceof ArrayBuffer) return data;
+  if (data instanceof Blob) return data.arrayBuffer();
   const copy = new Uint8Array(data.byteLength);
   copy.set(data);
   return copy.buffer;

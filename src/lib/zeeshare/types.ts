@@ -16,6 +16,8 @@ export type TransferState = {
   direction: "in" | "out";
   status: "connecting" | "active" | "done" | "failed";
   error?: string;
+  /** True when the received bytes are ready for a user-initiated save/download. */
+  readyToDownload?: boolean;
 };
 
 export type ConnectionStatus = "starting" | "ready" | "offline";
