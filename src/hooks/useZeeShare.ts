@@ -50,6 +50,7 @@ export function useZeeShare() {
   const addFiles = useCallback((files: File[]) => engineRef.current?.addFiles(files), []);
   const removeFile = useCallback((id: string) => engineRef.current?.removeFile(id), []);
   const download = useCallback((id: string) => void engineRef.current?.download(id), []);
+  const saveTransfer = useCallback((id: string) => engineRef.current?.saveTransfer(id) ?? false, []);
 
-  return { ...snapshot, addFiles, removeFile, download };
+  return { ...snapshot, addFiles, removeFile, download, saveTransfer };
 }
