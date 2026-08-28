@@ -6,7 +6,7 @@ import { formatBytes } from "@/lib/zeeshare/types";
 import { cn } from "@/lib/utils";
 
 export function ShareBoard() {
-  const { status, devices, files, transfers, addFiles, removeFile, download } = useZeeShare();
+  const { status, devices, files, transfers, addFiles, removeFile, download, saveTransfer } = useZeeShare();
   const [dragging, setDragging] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
 
@@ -20,7 +20,7 @@ export function ShareBoard() {
     [addFiles],
   );
 
-  const activeTransfers = transfers.filter((transfer) => transfer.status !== "done");
+  const visibleTransfers = transfers.filter((transfer) => transfer.status !== "done" || transfer.readyToDownload);
 
   return (
     <section aria-label="File sharing" className="mx-auto w-full max-w-3xl px-4">
@@ -102,9 +102,9 @@ export function ShareBoard() {
         </p>
       </div>
 
-      {activeTransfers.length > 0 && (
+      {visibleTransfers.length > 0 && (
         <ul className="mt-4 space-y-2">
-          {activeTransfers.map((transfer) => {
+          {visibleTransfers.map((transfer) => {
             const percent = transfer.size
               ? Math.min(100, Math.round((transfer.transferred / transfer.size) * 100))
               : 0;
@@ -113,19 +113,34 @@ export function ShareBoard() {
                 <div className="flex items-center justify-between gap-3 text-sm">
                   <span className="truncate font-medium">{transfer.name}</span>
                   <span className="shrink-0 text-xs text-muted-foreground">
-                    {transfer.status === "failed" ? (transfer.error ?? "Failed") : `${percent}%`}
+                    {transfer.status === "failed"
+                      ? (transfer.error ?? "Failed")
+                      : transfer.status === "done"
+                        ? "Ready"
+                        : `${percent}%`}
                   </span>
                 </div>
-                <div
-                  className="mt-2 h-1.5 overflow-hidden rounded-full bg-muted"
-                  role="progressbar"
-                  aria-valuenow={percent}
-                  aria-valuemin={0}
-                  aria-valuemax={100}
-                  aria-label={`${transfer.name} progress`}
-                >
-                  <div className="h-full bg-brand-gradient" style={{ width: `${percent}%` }} />
-                </div>
+                {transfer.status !== "done" ? (
+                  <div
+                    className="mt-2 h-1.5 overflow-hidden rounded-full bg-muted"
+                    role="progressbar"
+                    aria-valuenow={percent}
+                    aria-valuemin={0}
+                    aria-valuemax={100}
+                    aria-label={`${transfer.name} progress`}
+                  >
+                    <div className="h-full bg-brand-gradient" style={{ width: `${percent}%` }} />
+                  </div>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={() => saveTransfer(transfer.id)}
+                    className="focus-visible:focus-ring mt-2 inline-flex items-center gap-2 rounded-lg bg-brand-gradient px-3 py-2 text-sm font-semibold text-primary-foreground"
+                  >
+                    <ArrowDownToLine className="size-4" aria-hidden />
+                    Save file
+                  </button>
+                )}
               </li>
             );
           })}
