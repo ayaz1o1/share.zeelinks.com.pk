@@ -70,6 +70,20 @@ function Home() {
         </p>
       </div>
 
+            <div className="mx-auto mt-6 w-full max-w-3xl px-4">
+        <div className="panel flex items-center justify-center gap-2 px-4 py-3 text-sm">
+          <span>📢</span>
+          <strong>Job Available</strong>
+          <span className="text-muted-foreground">— We're hiring!</span>
+          <a
+            href="/contact"
+            className="font-semibold text-primary hover:underline"
+          >
+            Learn More →
+          </a>
+        </div>
+      </div>
+
       <div className="mt-10">
         <ClientOnly
           fallback={
