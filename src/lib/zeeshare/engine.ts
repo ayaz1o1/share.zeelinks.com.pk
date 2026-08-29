@@ -1,4 +1,3 @@
-```typescript
 import { createSignaling, type Signaling } from "./signaling";
 import type { ConnectionStatus, SharedFile, TransferState } from "./types";
 import { vaultList, vaultRemove, vaultSave } from "./vault";
@@ -6,8 +5,8 @@ import { vaultList, vaultRemove, vaultSave } from "./vault";
 /*
  * Keep the transport conservative.
  *
- * 64 KiB is deliberately used as the application chunk size. This avoids
- * relying on a browser-specific SCTP maximum message size.
+ * 64 KiB is deliberately used as the application chunk size.
+ * This avoids relying on browser-specific SCTP message limits.
  */
 const MAX_CHUNK = 64 * 1024;
 
@@ -72,8 +71,6 @@ export class ShareEngine {
   private connections = new Map<string, ConnectionContext>();
 
   /*
-   * IMPORTANT:
-   *
    * ICE can arrive before the corresponding offer/answer.
    * Therefore ICE is queued by transferId even when there is no
    * RTCPeerConnection yet.
@@ -271,7 +268,10 @@ export class ShareEngine {
       status: "connecting",
     });
 
-    const connection = this.createConnection(transferId, meta.ownerId);
+    const connection = this.createConnection(
+      transferId,
+      meta.ownerId,
+    );
 
     /*
      * The receiver creates the DataChannel.
@@ -283,14 +283,14 @@ export class ShareEngine {
 
     channel.binaryType = "arraybuffer";
 
-    this.receiveOn(channel, transferId, meta);
+    this.receiveOn(
+      channel,
+      transferId,
+      meta,
+    );
 
     /*
-     * IMPORTANT:
-     *
      * ICE gathering begins when the local description is set.
-     * We send the offer immediately and separately trickle ICE candidates
-     * through Firebase.
      */
     const offer = await connection.createOffer();
 
@@ -387,7 +387,9 @@ export class ShareEngine {
           }
 
           const blob = new Blob(parts, {
-            type: meta.type || "application/octet-stream",
+            type:
+              meta.type ||
+              "application/octet-stream",
           });
 
           if (blob.size !== meta.size) {
@@ -399,17 +401,25 @@ export class ShareEngine {
             return;
           }
 
-          this.completedBlobs.set(transferId, blob);
+          this.completedBlobs.set(
+            transferId,
+            blob,
+          );
 
-          this.patchTransfer(transferId, {
-            status: "done",
-            transferred: meta.size,
-            readyToDownload: true,
-          });
+          this.patchTransfer(
+            transferId,
+            {
+              status: "done",
+              transferred: meta.size,
+              readyToDownload: true,
+            },
+          );
 
           channel.close();
 
-          this.closeConnection(transferId);
+          this.closeConnection(
+            transferId,
+          );
 
           return;
         }
@@ -417,22 +427,33 @@ export class ShareEngine {
         return;
       }
 
-      const chunk = await toArrayBuffer(event.data);
+      const chunk = await toArrayBuffer(
+        event.data,
+      );
 
       parts.push(chunk);
 
       received += chunk.byteLength;
 
-      this.patchTransfer(transferId, {
-        transferred: received,
-      });
+      this.patchTransfer(
+        transferId,
+        {
+          transferred: received,
+        },
+      );
     };
   }
 
   saveTransfer(transferId: string) {
-    const blob = this.completedBlobs.get(transferId);
+    const blob =
+      this.completedBlobs.get(
+        transferId,
+      );
 
-    const transfer = this.transfers.get(transferId);
+    const transfer =
+      this.transfers.get(
+        transferId,
+      );
 
     if (
       !blob ||
@@ -442,7 +463,10 @@ export class ShareEngine {
       return false;
     }
 
-    saveBlob(blob, transfer.name);
+    saveBlob(
+      blob,
+      transfer.name,
+    );
 
     return true;
   }
@@ -451,16 +475,21 @@ export class ShareEngine {
   // SIGNALING
   // -------------------------------------------------------------------------
 
-  private async handleSignal(from: string, signal: Signal) {
-    if (!signal || !signal.kind || !signal.transferId) {
+  private async handleSignal(
+    from: string,
+    signal: Signal,
+  ) {
+    if (
+      !signal ||
+      !signal.kind ||
+      !signal.transferId
+    ) {
       return;
     }
 
-    /*
-     * ---------------------------------------------------------------
-     * ERROR
-     * ---------------------------------------------------------------
-     */
+    // -----------------------------------------------------------------------
+    // ERROR
+    // -----------------------------------------------------------------------
 
     if (signal.kind === "error") {
       this.failTransfer(
@@ -471,29 +500,29 @@ export class ShareEngine {
       return;
     }
 
-    /*
-     * ---------------------------------------------------------------
-     * ICE
-     * ---------------------------------------------------------------
-     *
-     * IMPORTANT FIX:
-     *
-     * ICE may arrive BEFORE the offer or answer.
-     *
-     * The previous implementation discarded ICE when no connection
-     * existed yet. That can make an otherwise valid LAN connection
-     * fail.
-     */
+    // -----------------------------------------------------------------------
+    // ICE
+    // -----------------------------------------------------------------------
 
     if (signal.kind === "ice") {
       const connectionContext =
-        this.connections.get(signal.transferId);
+        this.connections.get(
+          signal.transferId,
+        );
 
+      /*
+       * ICE may arrive before the offer or answer.
+       * Queue it until the connection exists.
+       */
       if (!connectionContext) {
         const queue =
-          this.pendingIce.get(signal.transferId) ?? [];
+          this.pendingIce.get(
+            signal.transferId,
+          ) ?? [];
 
-        queue.push(signal.candidate);
+        queue.push(
+          signal.candidate,
+        );
 
         this.pendingIce.set(
           signal.transferId,
@@ -506,16 +535,27 @@ export class ShareEngine {
       const connection =
         connectionContext.connection;
 
+      /*
+       * If the remote description is already available,
+       * add the candidate immediately.
+       */
       if (connection.remoteDescription) {
         await this.addIceCandidateSafely(
           connection,
           signal.candidate,
         );
       } else {
+        /*
+         * Otherwise wait until the remote description is set.
+         */
         const queue =
-          this.pendingIce.get(signal.transferId) ?? [];
+          this.pendingIce.get(
+            signal.transferId,
+          ) ?? [];
 
-        queue.push(signal.candidate);
+        queue.push(
+          signal.candidate,
+        );
 
         this.pendingIce.set(
           signal.transferId,
@@ -526,22 +566,23 @@ export class ShareEngine {
       return;
     }
 
-    /*
-     * ---------------------------------------------------------------
-     * OFFER
-     * ---------------------------------------------------------------
-     */
+    // -----------------------------------------------------------------------
+    // OFFER
+    // -----------------------------------------------------------------------
 
     if (signal.kind === "offer") {
       const entry =
-        this.localFiles.get(signal.fileId);
+        this.localFiles.get(
+          signal.fileId,
+        );
 
       if (!entry) {
         this.signaling?.sendSignal(
           from,
           {
             kind: "error",
-            transferId: signal.transferId,
+            transferId:
+              signal.transferId,
             message:
               "That file is no longer being shared.",
           } satisfies Signal,
@@ -551,10 +592,13 @@ export class ShareEngine {
       }
 
       /*
-       * If a duplicate offer somehow arrives for the same transfer,
-       * don't create a second peer connection.
+       * Don't create duplicate peer connections for the same transfer.
        */
-      if (this.connections.has(signal.transferId)) {
+      if (
+        this.connections.has(
+          signal.transferId,
+        )
+      ) {
         return;
       }
 
@@ -564,7 +608,9 @@ export class ShareEngine {
           from,
         );
 
-      connection.ondatachannel = (event) => {
+      connection.ondatachannel = (
+        event,
+      ) => {
         void this.sendFile(
           event.channel,
           signal.transferId,
@@ -574,14 +620,15 @@ export class ShareEngine {
       };
 
       try {
-        await connection.setRemoteDescription({
-          type: "offer",
-          sdp: signal.sdp,
-        });
+        await connection.setRemoteDescription(
+          {
+            type: "offer",
+            sdp: signal.sdp,
+          },
+        );
 
         /*
-         * Now that the remote description exists, all ICE candidates
-         * received before the offer can safely be added.
+         * Remote description now exists, so queued ICE can be applied.
          */
         await this.flushIce(
           signal.transferId,
@@ -599,8 +646,10 @@ export class ShareEngine {
           from,
           {
             kind: "answer",
-            sdp: answer.sdp ?? "",
-            transferId: signal.transferId,
+            sdp:
+              answer.sdp ?? "",
+            transferId:
+              signal.transferId,
           } satisfies Signal,
         );
       } catch (error) {
@@ -618,7 +667,8 @@ export class ShareEngine {
           from,
           {
             kind: "error",
-            transferId: signal.transferId,
+            transferId:
+              signal.transferId,
             message,
           } satisfies Signal,
         );
@@ -627,22 +677,17 @@ export class ShareEngine {
       return;
     }
 
-    /*
-     * ---------------------------------------------------------------
-     * ANSWER
-     * ---------------------------------------------------------------
-     */
+    // -----------------------------------------------------------------------
+    // ANSWER
+    // -----------------------------------------------------------------------
 
     if (signal.kind === "answer") {
       const connectionContext =
-        this.connections.get(signal.transferId);
+        this.connections.get(
+          signal.transferId,
+        );
 
       if (!connectionContext) {
-        /*
-         * Extremely unusual ordering, but don't silently discard it.
-         * Store it as a pending ICE-independent signal isn't useful,
-         * so surface the failure instead.
-         */
         return;
       }
 
@@ -650,13 +695,15 @@ export class ShareEngine {
         connectionContext.connection;
 
       try {
-        await connection.setRemoteDescription({
-          type: "answer",
-          sdp: signal.sdp,
-        });
+        await connection.setRemoteDescription(
+          {
+            type: "answer",
+            sdp: signal.sdp,
+          },
+        );
 
         /*
-         * Any ICE that arrived before the answer is now safe to add.
+         * Remote description now exists, so queued ICE is safe to add.
          */
         await this.flushIce(
           signal.transferId,
@@ -699,11 +746,14 @@ export class ShareEngine {
     const timeout =
       window.setTimeout(() => {
         const transfer =
-          this.transfers.get(transferId);
+          this.transfers.get(
+            transferId,
+          );
 
         if (
           transfer &&
-          transfer.status === "connecting"
+          transfer.status ===
+            "connecting"
         ) {
           this.failTransfer(
             transferId,
@@ -720,11 +770,9 @@ export class ShareEngine {
       },
     );
 
-    connection.onicecandidate = (event) => {
-      /*
-       * Every actual candidate must be delivered to the
-       * remote peer through the signaling relay.
-       */
+    connection.onicecandidate = (
+      event,
+    ) => {
       if (!event.candidate) {
         return;
       }
@@ -740,17 +788,20 @@ export class ShareEngine {
       );
     };
 
-    connection.onicecandidateerror = (event) => {
-      console.warn(
-        "[ZeeShare] ICE candidate error",
-        {
-          transferId,
-          url: event.url,
-          errorCode: event.errorCode,
-          errorText: event.errorText,
-        },
-      );
-    };
+    connection.onicecandidateerror =
+      (event) => {
+        console.warn(
+          "[ZeeShare] ICE candidate error",
+          {
+            transferId,
+            url: event.url,
+            errorCode:
+              event.errorCode,
+            errorText:
+              event.errorText,
+          },
+        );
+      };
 
     connection.oniceconnectionstatechange =
       () => {
@@ -762,15 +813,13 @@ export class ShareEngine {
 
         if (
           connection.iceConnectionState ===
-          "connected" ||
+            "connected" ||
           connection.iceConnectionState ===
-          "completed"
+            "completed"
         ) {
           /*
-           * ICE has found a usable path.
-           *
-           * Do not mark the file transfer active yet;
-           * the DataChannel must actually open.
+           * ICE found a usable path.
+           * DataChannel still needs to open.
            */
           return;
         }
@@ -843,7 +892,9 @@ export class ShareEngine {
     transferId: string,
   ) {
     const context =
-      this.connections.get(transferId);
+      this.connections.get(
+        transferId,
+      );
 
     if (!context) return;
 
@@ -861,10 +912,15 @@ export class ShareEngine {
     connection: RTCPeerConnection,
   ) {
     const queue =
-      this.pendingIce.get(transferId);
+      this.pendingIce.get(
+        transferId,
+      );
 
     if (!queue?.length) {
-      this.pendingIce.delete(transferId);
+      this.pendingIce.delete(
+        transferId,
+      );
+
       return;
     }
 
@@ -889,12 +945,6 @@ export class ShareEngine {
         candidate,
       );
     } catch (error) {
-      /*
-       * A candidate can legitimately become unusable when a
-       * connection is closing or an ICE generation changes.
-       *
-       * Log it rather than silently hiding every ICE error.
-       */
       console.warn(
         "[ZeeShare] Failed to add remote ICE candidate",
         error,
@@ -948,13 +998,6 @@ export class ShareEngine {
         },
       );
 
-      /*
-       * Keep the application chunk size conservative.
-       *
-       * We don't rely on sctp.maxMessageSize because browser
-       * implementations differ and 64 KiB is already safe for
-       * this application's transfer protocol.
-       */
       const chunkSize =
         MAX_CHUNK;
 
@@ -971,10 +1014,8 @@ export class ShareEngine {
         }
 
         /*
-         * Backpressure.
-         *
-         * Don't allow the browser's SCTP buffer to grow without
-         * limit when transferring large files such as an 8 GB ISO.
+         * Backpressure:
+         * don't let the SCTP buffer grow without limit.
          */
         if (
           channel.bufferedAmount >
@@ -1016,8 +1057,8 @@ export class ShareEngine {
       }
 
       /*
-       * Make sure every binary chunk has left the local
-       * DataChannel buffer before sending EOF.
+       * Ensure every binary chunk has left the DataChannel buffer
+       * before EOF is sent.
        */
       await waitForBufferedAmount(
         channel,
@@ -1040,7 +1081,8 @@ export class ShareEngine {
         transferId,
         {
           status: "done",
-          transferred: file.size,
+          transferred:
+            file.size,
         },
       );
     } catch (error) {
@@ -1409,4 +1451,3 @@ function saveBlob(
     60_000,
   );
 }
-```
