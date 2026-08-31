@@ -77,9 +77,8 @@ function Home() {
 
 
       /*
- * Advertisement block
- * Reserved space for future promotional content.
- * Keep this section separate from the main UI.
+ Advertisement block Reserved space for future promotional content.
+ Keep this section separate from the main UI.
  */
      <div className="mx-auto mt-6 w-full max-w-3xl px-4">
     <div className="panel flex items-center justify-center gap-2 px-4 py-3 text-sm">
