@@ -9,6 +9,10 @@ const title = "ZeeShare — Unlimited Local Network File Sharing";
 const description =
   "Share files between devices on the same Wi-Fi with no size limit, no accounts and no cloud storage. Open the site, drop a file, download it on the other device.";
 
+// This is a single-line comment you can add here
+/* from line 84 to
+   to 96 contains add block or space for advertisement */
+
 export const Route = createFileRoute("/")({
   head: () => ({
     meta: [
@@ -72,7 +76,11 @@ function Home() {
 
 
 
-      
+      /*
+ * Advertisement block
+ * Reserved space for future promotional content.
+ * Keep this section separate from the main UI.
+ */
      <div className="mx-auto mt-6 w-full max-w-3xl px-4">
     <div className="panel flex items-center justify-center gap-2 px-4 py-3 text-sm">
       <span>📢</span>
